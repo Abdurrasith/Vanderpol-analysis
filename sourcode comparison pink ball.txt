@@ -1,0 +1,90 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+import os
+
+# --- 1. IDEAL MODEL FUNCTION ---
+def vanderpol_model(t, A, w, phi):
+    return A * np.cos(w * t + phi)
+
+try:
+    # Assuming time_steps and x_smooth are already defined from your tracker
+    t_obs = np.array(time_steps)
+    x_obs = np.array(x_smooth)
+
+    # Set duration to 6 seconds
+    t_limit = 19.97
+    mask = t_obs <= t_limit
+    t_data = t_obs[mask]
+    x_data = x_obs[mask]
+
+    # --- 2. PARAMETER FITTING ---
+    initial_guess = [1.89, 5.1, 0]
+    popt, _ = curve_fit(vanderpol_model, t_data, x_data, p0=initial_guess)
+    _, w_fit, phi_fit = popt
+
+    # --- 3. REFERENCE SIGNAL ---
+    A_ref = 2.0021
+    x_theory = vanderpol_model(t_data, A_ref, w_fit, phi_fit)
+
+    # --- 4. PLOTTING ---
+    fig, ax = plt.subplots(figsize=(16, 8), dpi=300)
+
+    # Plot Ideal Reference
+    ax.plot(t_data, x_theory, color='#444444', linestyle='--', lw=2.5, alpha=0.6,
+             label=f'Ideal Reference (A = {A_ref})', zorder=1)
+
+    # Plot Video Observation
+    ax.plot(t_data, x_data, color='#1f77b4', lw=4, label='Video Observation', zorder=3)
+
+    # 1s Sampling Points
+    t_samp = np.arange(0, t_limit + 0.1, 1.0)
+    idx_samp = [np.abs(t_data - t).argmin() for t in t_samp]
+    ax.scatter(t_data[idx_samp], x_data[idx_samp], color='red', s=150,
+                edgecolors='black', linewidth=2, label='1s Sampling', zorder=5)
+
+    # --- 5. BOLD BORDERS & COORDINATES ---
+    for spine in ax.spines.values():
+        spine.set_linewidth(2.5)
+        spine.set_edgecolor('black')
+
+    ax.tick_params(axis='both', which='major', labelsize=14, width=2.5, length=6)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontweight('bold')
+
+    ax.set_xlabel("Time (s)", fontsize=16, fontweight='bold')
+    ax.set_ylabel("Displacement", fontsize=16, fontweight='bold')
+    ax.set_xlim(0, t_limit)
+    ax.set_ylim(-5.0, 5.0)
+
+    ax.axhline(0, color='black', lw=2, alpha=0.7)
+    ax.grid(True, linestyle='--', alpha=0.5, lw=1)
+    ax.legend(loc='upper right', prop={'size': 12, 'weight': 'bold'}, frameon=True, edgecolor='black')
+
+    # Annotations
+    for i, t_val in enumerate(t_samp):
+        ax.annotate(f"{int(t_val)}s", (t_data[idx_samp[i]], x_data[idx_samp[i]]),
+                     xytext=(0,20), textcoords="offset points", ha='center',
+                     fontsize=12, color='red', fontweight='bold')
+
+    # Parameter Box
+    param_text = (f"  PARAMETERS  \n"
+                  f"  -----------------------  \n"
+                  f"  A (Ref) : {A_ref:.1f}\n"
+                  f"  w (Fit) : {w_fit:.3f} rad/s\n"
+                  f"  phi(Fit): {phi_fit:.3f} rad")
+
+    ax.text(0.2, -4.5, param_text, fontsize=12, family='monospace', fontweight='bold',
+             bbox=dict(facecolor='white', alpha=0.9, edgecolor='black', lw=2, boxstyle='round'))
+
+    plt.tight_layout()
+
+    # --- 6. SAVE FEATURE (300 DPI) ---
+    file_name = "ungu2_300dpi.png"
+    plt.savefig(file_name, dpi=300, bbox_inches='tight')
+    print(f"Graph successfully saved as: {file_name}")
+
+    plt.show()
+
+except Exception as e:
+    print(f"Error: {e}")

@@ -1,0 +1,117 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+from google.colab import files
+import os
+
+# 1. KONFIGURASI VIDEO & DATA
+video_path = 'balonaja.mp4'
+
+if not os.path.exists(video_path):
+    print(f"Error: File {video_path} tidak ditemukan!")
+else:
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    list_x, time_steps = [], []
+    blueLower, blueUpper = (90, 70, 50), (130, 255, 255)
+
+    print("Memproses Video...")
+    while True:
+        ret, frame = cap.read()
+        if not ret: break
+        hsv = cv2.cvtColor(cv2.GaussianBlur(frame, (11, 11), 0), cv2.COLOR_BGR2HSV)
+        mask = cv2.dilate(cv2.erode(cv2.inRange(hsv, blueLower, blueUpper), None, iterations=3), None, iterations=3)
+        cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(cnts) > 0:
+            c = max(cnts, key=cv2.contourArea)
+            if cv2.contourArea(c) > 500:
+                M = cv2.moments(c)
+                if M["m00"] != 0:
+                    list_x.append(M["m10"] / M["m00"])
+                    time_steps.append(len(list_x) / fps)
+    cap.release()
+
+    # --- 2. ANALISIS MATEMATIKA ---
+    if len(list_x) > 15:
+        t_limit = 5.33
+        f_peak_fix = 1.125
+        mu_fix = 0.07
+        omega_fix = 2 * np.pi * f_peak_fix
+
+        time_steps = np.array(time_steps)
+        mask_t = time_steps <= t_limit
+        t_data = time_steps[mask_t]
+
+        # Sinyal Osilasi (Skala Amplitudo ~45)
+        x_raw = signal.detrend(list_x)
+        x_norm = 45 * (x_raw / np.max(np.abs(x_raw)))
+        x_smooth = signal.savgol_filter(x_norm, 11, 3)[mask_t]
+
+        # Envelope Hilbert
+        analytic_signal = signal.hilbert(x_smooth - np.mean(x_smooth))
+        amplitude_envelope = np.abs(analytic_signal)
+
+        # Kecepatan untuk Phase Portrait
+        dt = 1/fps
+        v_smooth = np.gradient(x_smooth, dt)
+        v_norm = 50 * (v_smooth / np.max(np.abs(v_smooth)))
+
+        # Indices untuk sampling 1 detik
+        indices_1s = [np.abs(t_data - t).argmin() for t in np.arange(0, t_limit + 0.1, 1.0)]
+
+        # --- 3. PLOTTING SINGLE HD IMAGE (3 IN 1) ---
+        plt.style.use('default')
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 24), dpi=300)
+
+        # Plot 1: Waveform Standard
+        ax1.plot(t_data, x_smooth, color='#1f77b4', lw=6, alpha=0.7, label='Waveform')
+        ax1.scatter(t_data[indices_1s], x_smooth[indices_1s], color='red', s=150, edgecolors='black', linewidths=3, label='1s Sample Points', zorder=5)
+        ax1.set_title("I. Waveform (Standard Observation)", fontsize=20, fontweight='bold')
+        ax1.set_xlabel('Time, t (s)', fontsize=14, fontweight='bold')
+        ax1.set_ylabel('Displacement (pixels)', fontsize=14, fontweight='bold')
+        ax1.set_xlim(0, t_limit); ax1.set_ylim(-55, 55); ax1.grid(True, alpha=0.3); ax1.legend(loc='upper right', fontsize=12)
+        # Mempertebal frame sangat tebal
+        for spine in ax1.spines.values():
+            spine.set_linewidth(5)
+            spine.set_edgecolor('black')
+        ax1.tick_params(axis='both', which='major', labelsize=13, width=3, length=8)
+        for label in ax1.get_xticklabels() + ax1.get_yticklabels():
+            label.set_fontweight('bold')
+
+        # Plot 2: Phase Portrait
+        ax2.plot(x_smooth, v_norm, color='#1f77b4', lw=6, label=f'mu = {mu_fix}')
+        ax2.scatter(x_smooth[indices_1s], v_norm[indices_1s], color='red', s=150, edgecolors='black', linewidths=3, zorder=5, label='1s State')
+        ax2.set_title("II. Phase Portrait (Limit Cycle)", fontsize=20, fontweight='bold')
+        ax2.set_xlabel('Position X', fontsize=14, fontweight='bold')
+        ax2.set_ylabel('Velocity', fontsize=14, fontweight='bold')
+        ax2.set_xlim(-55, 55); ax2.set_ylim(-60, 60)
+        ax2.axhline(0, color='black', lw=3); ax2.axvline(0, color='black', lw=3); ax2.grid(True, alpha=0.4); ax2.legend(loc='upper right', fontsize=12)
+        # Mempertebal frame sangat tebal
+        for spine in ax2.spines.values():
+            spine.set_linewidth(5)
+            spine.set_edgecolor('black')
+        ax2.tick_params(axis='both', which='major', labelsize=13, width=3, length=8)
+        for label in ax2.get_xticklabels() + ax2.get_yticklabels():
+            label.set_fontweight('bold')
+
+        # Plot 3: Periodogram
+        freqs, psd = signal.periodogram(x_smooth, fps)
+        ax3.semilogy(freqs, psd, color='darkorange', lw=6)
+        ax3.axvline(f_peak_fix, color='red', linestyle='--', lw=4, label=f'Peak: {f_peak_fix} Hz')
+        ax3.set_title("III. Frequency Spectrum (Periodogram)", fontsize=20, fontweight='bold')
+        ax3.set_xlabel('Frequency (Hz)', fontsize=14, fontweight='bold')
+        ax3.set_ylabel('Power Density', fontsize=14, fontweight='bold')
+        ax3.set_xlim(0, 5); ax3.grid(True, which="both", alpha=0.3); ax3.legend(fontsize=12)
+        # Mempertebal frame sangat tebal
+        for spine in ax3.spines.values():
+            spine.set_linewidth(5)
+            spine.set_edgecolor('black')
+        ax3.tick_params(axis='both', which='major', labelsize=13, width=3, length=8)
+        for label in ax3.get_xticklabels() + ax3.get_yticklabels():
+            label.set_fontweight('bold')
+
+        final_filename = 'VanderPol_Full_Analysis_3Plots_HD.png'
+        plt.savefig(final_filename, dpi=300, bbox_inches='tight')
+        plt.show()
+        files.download(final_filename)

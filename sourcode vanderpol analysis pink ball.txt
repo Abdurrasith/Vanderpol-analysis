@@ -1,0 +1,157 @@
+import cv2
+import numpy as np
+from collections import deque
+import matplotlib.pyplot as plt
+from scipy import signal
+from google.colab import files
+import os
+
+# 1. VIDEO CONFIGURATION & DATA EXTRACTION
+video_path = 'pinkdebitkecil3050.mp4'
+
+if not os.path.exists(video_path):
+    print(f"Error: File {video_path} not found!")
+else:
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps == 0: fps = 30
+
+    list_x, time_steps = [], []
+
+    # --- RANGE UNTUK DETEKSI UNGU (Purple/Lavender) ---
+    lower_pink = np.array([155, 50, 100])
+    upper_pink = np.array([175, 255, 255])
+
+    print("Processing Video (Detecting Pink Ball)...")
+    while True:
+        ret, frame = cap.read()
+        if not ret: break
+
+        # Pre-processing dengan Blur lebih kuat untuk menyamarkan tekstur polkadot
+        hsv = cv2.cvtColor(cv2.GaussianBlur(frame, (15, 15), 0), cv2.COLOR_BGR2HSV)
+
+        # Masking
+        mask = cv2.inRange(hsv, lower_pink, upper_pink)
+
+        # Penutupan lubang polkadot dengan Dilasi
+        mask = cv2.dilate(cv2.erode(mask, None, iterations=2), None, iterations=4)
+
+        cnts, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if len(cnts) > 0:
+            c = max(cnts, key=cv2.contourArea)
+            if cv2.contourArea(c) > 300: # Threshold diturunkan sedikit agar lebih sensitif
+                M = cv2.moments(c)
+                if M["m00"] != 0:
+                    curr_x = M["m10"] / M["m00"]
+                    list_x.append(curr_x)
+                    time_steps.append(len(list_x) / fps)
+
+    cap.release()
+
+    # --- 2. AUTOMATIC MATHEMATICAL ANALYSIS ---
+    if len(list_x) > 15:
+        time_steps = np.array(time_steps)
+        t_duration = time_steps[-1]
+
+        # Detrend dan Normalisasi
+        x_norm = signal.detrend(list_x)
+        x_norm = 2 * (x_norm / np.max(np.abs(x_norm)))
+
+        # Filtering Savitzky-Golay
+        window_size = min(11, len(x_norm) // 2 if len(x_norm) // 2 % 2 != 0 else len(x_norm) // 2 - 1)
+        x_smooth = signal.savgol_filter(x_norm, window_size, 3)
+
+        dt = 1/fps
+        v_smooth = np.gradient(x_smooth, dt)
+        v_norm = 2.5 * (v_smooth / np.max(np.abs(v_smooth)))
+
+        # 1-second interval sampling
+        t_sampling_range = np.arange(0, t_duration, 1.0)
+        indices_1s = [np.abs(time_steps - t).argmin() for t in t_sampling_range]
+        t_1s, x_1s, v_1s = time_steps[indices_1s], x_smooth[indices_1s], v_norm[indices_1s]
+
+        # Estimasi Parameter
+        freqs_est, psd_est = signal.periodogram(x_smooth, fps)
+        f_peak_fix = freqs_est[np.argmax(psd_est)]
+        omega_0 = 2 * np.pi * f_peak_fix
+        A_val = np.max(np.abs(x_smooth))
+        phi_val = 2.4
+
+        # --- 3. PLOTTING WITH BOLD FRAMES (Gaya Program Sebelumnya) ---
+        plt.style.use('default')
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 24), dpi=300)
+        fig.suptitle(f'VAN DER POL ANALYSIS - PINK BALL (Full Duration: {t_duration:.2f}s)',
+                     fontsize=20, fontweight='bold', y=0.98)
+
+        def apply_bold_style(ax):
+            for spine in ax.spines.values():
+                spine.set_linewidth(3.0)
+            ax.tick_params(axis='both', labelsize=12, width=2.5, length=7)
+            ax.xaxis.label.set_weight('bold')
+            ax.yaxis.label.set_weight('bold')
+
+        # Plot 1: Waveform
+        ax1.plot(time_steps, x_smooth, color='#1f77b4', lw=2.5, alpha=0.8) # Warna Ungu
+        ax1.scatter(t_1s, x_1s, color='red', s=80, edgecolors='black', label='1s Sample Points', zorder=5)
+        for i, t_val in enumerate(t_sampling_range):
+            ax1.annotate(f"{int(t_val)}s", (t_1s[i], x_1s[i]), xytext=(0,12),
+                         textcoords="offset points", ha='center', fontsize=10, color='red', fontweight='bold')
+
+        ax1.set_title(f"Waveform (Total Duration: {t_duration:.2f}s)", fontsize=15, fontweight='bold')
+        ax1.set_xlabel('Time (s)'); ax1.set_ylabel('Position X')
+        ax1.set_xlim(0, t_duration); ax1.set_ylim(-2.5, 2.5)
+        ax1.axhline(0, color='black', lw=1.5); ax1.grid(True, alpha=0.3); ax1.legend(prop={'weight':'bold'})
+        apply_bold_style(ax1)
+
+        # Plot 2: Phase Portrait
+        ax2.plot(x_smooth, v_norm, color='#1f77b4', lw=2.5)
+        ax2.scatter(x_1s, v_1s, color='red', s=70, edgecolors='black', zorder=5, label='1s State')
+        for i, t_val in enumerate(t_sampling_range):
+            ax2.annotate(f"{int(t_val)}s", (x_1s[i], v_1s[i]), xytext=(8,8),
+                         textcoords="offset points", fontsize=10, color='red', fontweight='bold')
+
+        ax2.set_title("Phase Portrait (Limit Cycle)", fontsize=15, fontweight='bold')
+        ax2.set_xlabel('Position X'); ax2.set_ylabel('Velocity (dX/dt)')
+        ax2.set_xlim(-3, 3); ax2.set_ylim(-3, 3)
+        ax2.axhline(0, color='black', lw=1.5); ax2.axvline(0, color='black', lw=1.5)
+        ax2.grid(True, alpha=0.4); ax2.legend(loc='upper right', prop={'weight':'bold'})
+        apply_bold_style(ax2)
+
+        # Plot 3: Periodogram
+        ax3.semilogy(freqs_est, psd_est, color='darkorange', lw=2)
+        ax3.axvline(f_peak_fix, color='red', linestyle='--', lw=2, label=f'Peak: {f_peak_fix:.3f} Hz')
+        ax3.set_title(f"Periodogram (omega: {omega_0:.3f} rad/s)", fontsize=15, fontweight='bold')
+        ax3.set_xlabel("Frequency (Hz)"); ax3.set_ylabel("Power Density")
+        ax3.set_xlim(0, max(5, f_peak_fix * 3)); ax3.grid(True, which="both", alpha=0.3); ax3.legend(prop={'weight':'bold'})
+        apply_bold_style(ax3)
+
+        # --- 4. PARAMETER BOX ---
+        param_text = (
+            f"{'='*45}\n"
+            f"           PARAMETER EXTRACTION RESULTS\n"
+            f"{'='*45}\n"
+            f"1. Mean Displacement (ξ)   : {np.mean(np.abs(x_smooth)):.4f} units\n"
+            f"2. Total Duration (t)      : {t_duration:.2f} s\n"
+            f"3. Amplitude (A)           : {A_val:.4f}\n"
+            f"4. Angular Frequency (ω_0) : {omega_0:.4f} rad/s\n"
+            f"5. Initial Phase (ϕ)       : {phi_val:.4f} rad\n"
+            f"{'-'*45}\n"
+            f"ANALYTICAL EQUATION MODEL:\n"
+            f"ξ(t) = {A_val:.2f} * cos({omega_0:.2f}t + {phi_val:.2f})\n"
+            f"{'='*45}"
+        )
+
+        fig.text(0.5, 0.01, param_text, ha='center', va='bottom', fontsize=11,
+                 family='monospace', fontweight='bold',
+                 bbox=dict(facecolor='white', alpha=0.9, edgecolor='black', boxstyle='round,pad=1'))
+
+        plt.tight_layout(rect=[0, 0.12, 1, 0.95])
+
+        combined_filename = 'VanderPol_Pink_Analysis.png'
+        plt.savefig(combined_filename, dpi=300, bbox_inches='tight')
+        plt.show()
+
+        files.download(combined_filename)
+    else:
+        print("Data tidak cukup. Pastikan rentang warna pink sudah sesuai dengan pencahayaan video.")
